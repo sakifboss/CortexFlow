@@ -1,0 +1,177 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────────────────────
+# CortexFlow — local/dev stack.
+# Infra services are pinned; app services build from ./infra/docker.
+# ──────────────────────────────────────────────────────────────
+
+networks:
+  cortex:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  qdrant_data:
+  neo4j_data:
+  minio_data:
+  es_data:
+  ollama_models:
+
+services:
+  # ── Data plane ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cortex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cortex}
+      POSTGRES_DB: ${POSTGRES_DB:-cortexflow}
+    ports: ["5432:5432"]
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cortex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [cortex]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [cortex]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${POSTGRES_USER:-cortex}
+      RABBITMQ_DEFAULT_PASS: ${POSTGRES_PASSWORD:-cortex}
+    ports: ["5672:5672", "15672:15672"]
+    networks: [cortex]
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    restart: unless-stopped
+    ports: ["6333:6333", "6334:6334"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+    networks: [cortex]
+
+  neo4j:
+    image: neo4j:5.20-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cortexneo4j}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports: ["7474:7474", "7687:7687"]
+    volumes: ["neo4j_data:/data"]
+    networks: [cortex]
+
+  minio:
+    image: minio/minio:RELEASE.2024-08-17T01-24-54Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-cortexminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-cortexminio}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio_data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [cortex]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports: ["9200:9200"]
+    volumes: ["es_data:/usr/share/elasticsearch/data"]
+    networks: [cortex]
+
+  # ── AI ──────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:0.3.12
+    restart: unless-stopped
+    ports: ["11434:11434"]
+    volumes: ["ollama_models:/root/.ollama"]
+    # On Linux you can enable GPU passthrough here:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
+    networks: [cortex]
+
+  # One-shot model puller (qwen2.5:3b + embedding model).
+  ollama-init:
+    image: ollama/ollama:0.3.12
+    depends_on: [ollama]
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - |
+        sleep 5
+        echo "Pulling $$LLM_MODEL …"
+        curl -sS http://ollama:11434/api/pull -d "{\"name\":\"$$LLM_MODEL\"}" || true
+        echo "Pulling $$EMBEDDING_MODEL …"
+        curl -sS http://ollama:11434/api/pull -d "{\"name\":\"$$EMBEDDING_MODEL\"}" || true
+        echo "done."
+    networks: [cortex]
+    restart: "no"
+
+  # ── App ─────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_started}
+    ports: ["8000:8000"]
+    networks: [cortex]
+    command: ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on: [api, rabbitmq]
+    networks: [cortex]
+    command:
+      [
+        "celery","-A","app.workers.celery_app","worker","--loglevel=info","-Q","ingest,embed,default","-c","2"
+      ]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infra/docker/frontend.Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    depends_on: [api]
+    ports: ["3000:3000"]
+    networks: [cortex]
