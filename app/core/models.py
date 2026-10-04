@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -49,4 +49,4 @@ class SoftDeleteMixin:
 class MetadataMixin:
     """Free-form JSON metadata column for extensibility."""
 
-    meta: Mapped[dict | None] = mapped_column(default=None)
+    meta: Mapped[dict | None] = mapped_column(JSONB, default=None)

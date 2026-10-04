@@ -12,7 +12,7 @@ from typing import Any, Literal
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from otpauth import Totp
+import otpauth
 
 from app.core.config import settings
 
@@ -76,19 +76,21 @@ def decode_token(token: str) -> dict[str, Any]:
 
 
 # ── MFA (TOTP, RFC 6238) ─────────────────────────────────────
+def _totp(secret: str):
+    return otpauth.TOTP.from_b32encode(secret)
+
+
 def generate_mfa_secret() -> str:
     return base64.b32encode(secrets.token_bytes(20)).decode("utf-8").rstrip("=")
 
 
 def mfa_provisioning_uri(email: str, secret: str) -> str:
-    return Totp(secret=secret, digits=6, interval=30).to_provisioning_uri(
-        name=email, issuer_name=settings.app_name
-    )
+    return _totp(secret).to_uri(email, settings.app_name)
 
 
 def verify_mfa(secret: str, code: str) -> bool:
     try:
-        return Totp(secret=secret, digits=6, interval=30).verify(code=code)
+        return _totp(secret).verify(code=int(code))
     except Exception:
         return False
 

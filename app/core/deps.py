@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, Header, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Path, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,7 +83,7 @@ CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 
 # ── Workspace resolution & RBAC ──────────────────────────────
 async def resolve_workspace(
-    workspace_id: Annotated[uuid.UUID, Query()],
+    workspace_id: Annotated[uuid.UUID, Path()],
     db: DbDep,
     user: CurrentUserDep,
 ) -> CurrentUser:

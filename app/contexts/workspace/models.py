@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -31,7 +31,7 @@ class Workspace(Base, UUIDPK, TimestampMixin):
     org_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id"), default=None
     )
-    settings: Mapped[dict | None] = mapped_column(default=None)
+    settings: Mapped[dict | None] = mapped_column(JSONB, default=None)
     plan: Mapped[str] = mapped_column(String(20), default="free")
 
     members: Mapped[list["WorkspaceMember"]] = relationship(

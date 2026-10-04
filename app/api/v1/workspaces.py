@@ -14,7 +14,7 @@ from app.contexts.workspace.schemas import (
     WorkspaceUpdateIn,
 )
 from app.contexts.workspace.service import workspace_service
-from app.core.deps import CurrentUserDep, DbDep
+from app.core.deps import CurrentUserDep, DbDep, WorkspaceDep, require_roles
 from app.core.tenant import Role
 from app.services.audit import audit
 
@@ -47,14 +47,10 @@ async def get_workspace(workspace_id: uuid.UUID, user, db: DbDep):  # type: igno
 
 @router.patch("/{workspace_id}", response_model=WorkspaceOut)
 async def update_workspace(
-    workspace_id: uuid.UUID, payload: WorkspaceUpdateIn, ws_user=Depends, db: DbDep
+    workspace_id: uuid.UUID, payload: WorkspaceUpdateIn, ws: WorkspaceDep, db: DbDep
 ):  # type: ignore[no-untyped-def]
-    from fastapi import Depends
-
-    from app.core.deps import require_roles
-
     guard = require_roles(Role.OWNER, Role.ADMIN)
-    await guard(ws_user)  # not wired for brevity — see note
+    await guard(ws)
     return await workspace_service.update(db, workspace_id, payload)
 
 
